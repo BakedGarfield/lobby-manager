@@ -3,7 +3,7 @@
   "id": "lobbymanager",
   "version": "${version}",
   "name": "Lobby Manager",
-  "description": "Lobby join/return, separate inventories, and lobby protection for Worlds + Easy NPC.",
+  "description": "Custom lobby spawn on join, Overworld respawn on death, separate inventories, and lobby protection.",
   "authors": ["BakedGarfield"],
   "license": "MIT",
   "environment": "server",

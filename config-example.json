@@ -29,6 +29,12 @@
     "survivalTeleportFailed": "Could not teleport you to survival.",
     "inventorySwapFailed": "Could not switch inventories. Contact an administrator.",
     "playerDataLoadFailed": "Your player data could not be loaded. Contact an administrator.",
-    "playerDataUnavailable": "Your player data is unavailable. Contact an administrator."
-  }
+    "playerDataUnavailable": "Your player data is unavailable. Contact an administrator.",
+    "setLobbySuccess": "Lobby spawn saved at {x}, {y}, {z}.",
+    "setLobbyWrongWorld": "Run /setlobby from inside the configured lobby world.",
+    "setLobbySaveFailed": "Could not save the lobby spawn. Check the server logs.",
+    "respawnWorldUnavailable": "Could not find the Overworld for respawning. Contact an administrator."
+  },
+  "lobbySpawn": null,
+  "respawnAtOverworldSpawn": true
 }

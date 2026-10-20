@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
 
 /** Server settings, including the text displayed by lobby commands. */
 public final class Config {
@@ -16,6 +18,10 @@ public final class Config {
     public String defaultSurvivalDimension = "minecraft:overworld";
     public String allowedNpcTag = "lobbymanager_npc";
     public boolean lobbyOnJoin = true;
+    /** Set in-game with /setlobby; null falls back to the lobby world's built-in spawn. */
+    public PlayerRecord.Position lobbySpawn = null;
+    /** After death, respawn in the Overworld at /setworldspawn (not in the lobby or at a bed). */
+    public boolean respawnAtOverworldSpawn = true;
     public boolean lobbyAdventure = true;
     public boolean noBlockBreak = true;
     public boolean noBlockPlaceOrUse = true;
@@ -34,6 +40,10 @@ public final class Config {
     public static final class Messages {
         public String prefix = "[Lobby Manager] ";
         public String lobbySuccess = "Teleported to the lobby.";
+        public String setLobbySuccess = "Lobby spawn saved at {x}, {y}, {z}.";
+        public String setLobbyWrongWorld = "Run /setlobby from inside the configured lobby world.";
+        public String setLobbySaveFailed = "Could not save the lobby spawn. Check the server logs.";
+        public String respawnWorldUnavailable = "Could not find the Overworld for respawning. Contact an administrator.";
         public String lobbyTeleportFailed = "Could not teleport you to the lobby.";
         public String lobbyWorldUnavailable = "The lobby world {dimension} is not loaded. Contact an administrator.";
         public String buildModeEnabled = "Build mode enabled.";
@@ -49,13 +59,31 @@ public final class Config {
     }
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final String FILE_NAME = "lobbymanager.json";
+
+    /** Persist operator changes without requiring a restart. */
+    public void save() throws IOException {
+        Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+        Files.createDirectories(path.getParent());
+        Path temp = Files.createTempFile(path.getParent(), "lobbymanager-", ".tmp");
+        try {
+            Files.writeString(temp, GSON.toJson(this), StandardCharsets.UTF_8);
+            try {
+                Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+    }
 
     public static Config load() throws IOException {
-        Path path = FabricLoader.getInstance().getConfigDir().resolve("lobbymanager.json");
+        Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
         Files.createDirectories(path.getParent());
         if (!Files.exists(path)) {
             Config config = new Config();
-            Files.writeString(path, GSON.toJson(config), StandardCharsets.UTF_8);
+            config.save();
             return config;
         }
         try {

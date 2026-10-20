@@ -5,6 +5,7 @@ import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
@@ -62,6 +63,8 @@ public final class LobbyManager implements ModInitializer {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.getPlayer()));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> onLeave(handler.getPlayer(), server));
         ServerTickEvents.END_SERVER_TICK.register(LobbyManager::onTick);
+        // The join event is NOT a death-respawn event. Keep those paths independent.
+        ServerPlayerEvents.AFTER_RESPAWN.register(LobbyManager::onRespawn);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             for (ServerPlayer player : server.getPlayerList().getPlayers()) saveOnline(player, server);
         });
@@ -166,6 +169,46 @@ public final class LobbyManager implements ModInitializer {
         }
     }
 
+    /** Respawning after death uses the vanilla Overworld world spawn, never /setlobby. */
+    private static void onRespawn(ServerPlayer oldPlayer, ServerPlayer newPlayer, boolean alive) {
+        if (alive || !config.respawnAtOverworldSpawn) return;
+        buildMode.remove(newPlayer.getUUID());
+        MinecraftServer server = newPlayer.level().getServer();
+        ServerLevel overworld = world(server, "minecraft:overworld");
+        if (overworld == null) {
+            LOG.error("Cannot respawn {} in Overworld: dimension is not loaded", newPlayer.getName().getString());
+            sendMessage(newPlayer, config.messages.respawnWorldUnavailable);
+            return;
+        }
+        var spawn = overworld.getRespawnData();
+        BlockPos pos = spawn.pos();
+        if (!newPlayer.teleportTo(overworld, pos.getX() + .5, pos.getY(), pos.getZ() + .5,
+                Set.of(), spawn.yaw(), spawn.pitch(), false)) {
+            LOG.error("Could not teleport {} to the Overworld after death", newPlayer.getName().getString());
+            return;
+        }
+        PlayerRecord record = records.get(newPlayer.getUUID());
+        if (record == null) return; // Never replace inventories on a corrupt/unreadable save.
+        if (config.separateInventories && "LOBBY".equals(record.activeGroup)) {
+            // The respawned player carries the post-death lobby inventory; restore survival.
+            if (!switchGroup(newPlayer, record, "SURVIVAL", server)) return;
+        } else if (!config.separateInventories) {
+            // With inventory separation disabled, all worlds share the live inventory.
+            record.activeGroup = "SURVIVAL";
+        }
+        record.lastSurvival = PlayerRecord.location(newPlayer);
+        try {
+            // Preserve the actual post-death survival inventory (drops / keepInventory).
+            // Otherwise an old snapshot could bring back dropped items after a lobby visit.
+            if ("SURVIVAL".equals(record.activeGroup)) {
+                record.survival = PlayerRecord.InventorySnapshot.capture(newPlayer, server.registryAccess());
+            }
+            store.save(newPlayer.getUUID(), record);
+        } catch (Exception e) {
+            LOG.error("Could not save post-death data for {}", newPlayer.getName().getString(), e);
+        }
+    }
+
     private static boolean joinLobby(ServerPlayer player, PlayerRecord record, MinecraftServer server) {
         ServerLevel lobby = world(server, config.lobbyDimension);
         if (lobby == null) {
@@ -178,16 +221,26 @@ public final class LobbyManager implements ModInitializer {
         if (!isLobby(player) && "SURVIVAL".equals(record.activeGroup)) {
             record.lastSurvival = PlayerRecord.location(player);
         }
-        var respawn = lobby.getRespawnData();
-        var spawn = respawn.pos();
-        float angle = respawn.yaw();
+        PlayerRecord.Position configuredSpawn = config.lobbySpawn;
+        double x, y, z;
+        float yaw, pitch;
+        if (configuredSpawn != null && config.lobbyDimension.equals(configuredSpawn.world())) {
+            x = configuredSpawn.x(); y = configuredSpawn.y(); z = configuredSpawn.z();
+            yaw = configuredSpawn.yaw(); pitch = configuredSpawn.pitch();
+        } else {
+            // Keep older installations working until an operator runs /setlobby.
+            var respawn = lobby.getRespawnData();
+            var spawn = respawn.pos();
+            x = spawn.getX() + .5; y = spawn.getY(); z = spawn.getZ() + .5;
+            yaw = respawn.yaw(); pitch = respawn.pitch();
+        }
         if (isLobby(player)) {
             if (config.separateInventories && !"LOBBY".equals(record.activeGroup)) {
                 // This situation can arise after crash recovery. Do NOT guess the inventory owner.
                 LOG.warn("{} is in lobby but file states SURVIVAL; preserving item data", player.getName().getString());
             }
-            boolean moved = player.teleportTo(lobby, spawn.getX() + .5, spawn.getY(), spawn.getZ() + .5,
-                    Set.of(), angle, 0, false);
+            boolean moved = player.teleportTo(lobby, x, y, z,
+                    Set.of(), yaw, pitch, false);
             if (!moved) sendMessage(player, config.messages.lobbyTeleportFailed);
             return moved;
         }
@@ -195,8 +248,8 @@ public final class LobbyManager implements ModInitializer {
         if (config.separateInventories && "SURVIVAL".equals(record.activeGroup)) {
             if (!switchGroup(player, record, "LOBBY", server)) return false;
         }
-        boolean ok = player.teleportTo(lobby, spawn.getX() + .5, spawn.getY(), spawn.getZ() + .5,
-                Set.of(), angle, 0, false);
+        boolean ok = player.teleportTo(lobby, x, y, z,
+                Set.of(), yaw, pitch, false);
         if (!ok) {
             LOG.warn("Teleport to lobby rejected for {}", player.getName().getString());
             sendMessage(player, config.messages.lobbyTeleportFailed);
@@ -260,12 +313,20 @@ public final class LobbyManager implements ModInitializer {
         // Blank messages can be used to disable a notification in the config.
         if (message == null || message.isBlank()) return;
         String prefix = config.messages.prefix == null ? "" : config.messages.prefix;
-        player.sendSystemMessage(Component.literal(prefix +
-                message.replace("{dimension}", config.lobbyDimension)));
+        String formatted = message.replace("{dimension}", config.lobbyDimension);
+        if (config.lobbySpawn != null) {
+            formatted = formatted.replace("{x}", String.format(java.util.Locale.ROOT, "%.2f", config.lobbySpawn.x()))
+                    .replace("{y}", String.format(java.util.Locale.ROOT, "%.2f", config.lobbySpawn.y()))
+                    .replace("{z}", String.format(java.util.Locale.ROOT, "%.2f", config.lobbySpawn.z()));
+        }
+        player.sendSystemMessage(Component.literal(prefix + formatted));
     }
 
     private static void commands(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("returntosurvival").executes(LobbyManager::returnToSurvival));
+        dispatcher.register(Commands.literal("setlobby")
+                .requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
+                .executes(ctx -> setLobby(ctx.getSource().getPlayerOrException())));
         dispatcher.register(Commands.literal("lobby").executes(ctx -> {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             PlayerRecord record = records.get(player.getUUID());
@@ -280,6 +341,25 @@ public final class LobbyManager implements ModInitializer {
         dispatcher.register(Commands.literal("buildmode")
                 .requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
                 .executes(ctx -> toggleBuild(ctx.getSource().getPlayerOrException())));
+    }
+
+    private static int setLobby(ServerPlayer player) {
+        if (!isLobby(player)) {
+            sendMessage(player, config.messages.setLobbyWrongWorld);
+            return 0;
+        }
+        PlayerRecord.Position oldSpawn = config.lobbySpawn;
+        config.lobbySpawn = PlayerRecord.location(player);
+        try {
+            config.save();
+            sendMessage(player, config.messages.setLobbySuccess);
+            return 1;
+        } catch (IOException e) {
+            config.lobbySpawn = oldSpawn;
+            LOG.error("Failed to save lobby spawn location", e);
+            sendMessage(player, config.messages.setLobbySaveFailed);
+            return 0;
+        }
     }
 
     private static int toggleBuild(ServerPlayer player) {

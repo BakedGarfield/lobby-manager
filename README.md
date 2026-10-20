@@ -6,7 +6,9 @@ A **server-side Fabric mod** for Minecraft **26.3** that sends players to a prot
 
 ## Features
 
-- **Lobby on join:** players are sent to the configured lobby dimension and its world spawn when connecting.
+- **Lobby on join:** players are sent to the custom `/setlobby` location in the lobby dimension when connecting (or the lobby world spawn until `/setlobby` is configured).
+- **Independent spawns:** `/setlobby` sets the login/lobby teleport point without changing `/setworldspawn` in the Overworld.
+- **Overworld respawn after death:** when `respawnAtOverworldSpawn` is enabled, death sends players to the Overworld world spawn set with `/setworldspawn`, never to the lobby; this overrides beds and respawn anchors.
 - **Return to survival:** players can return to their last saved survival position, including a position in the Nether, End, or another loaded dimension. Players without a saved position use the default survival world spawn.
 - **Separate inventories:** saves main inventory, armor/equipment/offhand, Ender Chest, XP, hunger, health, and game mode independently for lobby and survival. Survival dimensions share one inventory group.
 - **Lobby protection:** enables Adventure Mode for visitors and blocks typical block breaking, block interaction, item use, entity attacks, entity interaction (except for tagged NPCs), damage, dropped items, and pickups. Hunger is kept full.
@@ -18,7 +20,9 @@ A **server-side Fabric mod** for Minecraft **26.3** that sends players to a prot
 
 | Command | Who can use it | What it does |
 | --- | --- | --- |
-| `/lobby` | All players | Teleport to the lobby spawn. |
+| `/lobby` | All players | Teleport to the location saved by `/setlobby` (or the lobby world spawn before it is set). |
+| `/setlobby` | Operators with Game Master command permissions | Save your current position and look direction as the lobby spawn. Use from inside the configured lobby dimension. |
+| `/setworldspawn` | Vanilla Minecraft permission rules | Set the Overworld world spawn **while standing in the Overworld**. This does not change the custom lobby spawn. |
 | `/returntosurvival` | All players | Return from the lobby to your saved survival position, or to the default survival spawn. |
 | `/buildmode` | Operators with Game Master command permissions | Toggle temporary Creative Mode for building in the lobby. Only works inside the lobby. |
 
@@ -46,16 +50,29 @@ The Fabric metadata suggests Worlds, rather than requiring a particular Worlds m
    /worlds tp lobby
    ```
 
-4. While in the lobby, configure its spawn and ensure it loads on server startup:
+4. In the lobby dimension, set it to load at server startup:
 
    ```mcfunction
-   /worlds settings spawn here
    /worlds settings loadOnStartup true
    ```
 
-5. In the lobby world, set the gamerules recommended below. These commands may depend on your Worlds/Minecraft versions.
-6. Start/restart the server. The mod creates **`config/lobbymanager.json`** automatically on first launch. Check that `lobbyDimension` matches the actual world ID, normally `minecraft:lobby`, and restart if you change it.
-7. Join with a test player, run `/lobby`, then `/returntosurvival`, and verify inventories before deploying to a real server.
+5. In the lobby world, apply the recommended lobby gamerules below. Commands may depend on your Worlds/Minecraft versions.
+6. Start/restart the server. The mod creates **`config/lobbymanager.json`** on first launch. Check that `lobbyDimension` matches the actual world ID, normally `minecraft:lobby`, and restart if you change it.
+7. **In the lobby world, stand exactly where players should arrive and run:**
+
+   ```mcfunction
+   /setlobby
+   ```
+
+   Your precise coordinates and facing direction are written to `config/lobbymanager.json` immediately. This **does not** change the vanilla world spawn.
+8. **Go to the Overworld** and set the death-respawn point independently:
+
+   ```mcfunction
+   /setworldspawn
+   ```
+
+   With `respawnAtOverworldSpawn: true`, deaths always respawn at the Overworld world spawn, including players who die in another dimension. Beds and respawn anchors are ignored for death respawns. The optional `/returntosurvival` NPC still returns players to their previous survival location, except that after dying the saved return location is updated to the Overworld spawn.
+9. Join with a test player, confirm joining goes to `/setlobby`, dying in survival respawns at `/setworldspawn`, and returning from the NPC works with the correct inventory.
 
 ### Recommended lobby gamerules
 
@@ -99,9 +116,11 @@ For example:
 ```json
 {
   "lobbyDimension": "minecraft:lobby",
+  "respawnAtOverworldSpawn": true,
   "messages": {
     "prefix": "[Lobby Manager] ",
     "lobbySuccess": "Welcome to the lobby!",
+    "setLobbySuccess": "Lobby position saved at {x}, {y}, {z}.",
     "buildModeEnabled": "You can now build in the lobby.",
     "buildModeDisabled": "Build mode is off.",
     "survivalSuccess": "Have fun in survival!"
@@ -109,7 +128,9 @@ For example:
 }
 ```
 
-This is an **excerpt**, not a replacement for the entire config. Existing settings can remain unchanged. All default messages are in English; you may translate any value. To hide an individual notification, set its message text to `""`. Change `messages.prefix` to adjust the tag printed before notifications, or set it to `""` for no prefix. The **`{dimension}`** placeholder in `lobbyWorldUnavailable` is replaced by the configured lobby world ID. Message settings take effect **after a restart**, not immediately.
+This is an **excerpt**, not a replacement for the entire config. Existing settings can remain unchanged. All default messages are in English; you may translate any value. To hide an individual notification, set its message text to `""`. Change `messages.prefix` to adjust the tag printed before notifications, or set it to `""` for no prefix. The **`{dimension}`** placeholder in `lobbyWorldUnavailable` is replaced by the configured lobby world ID. The **`{x}`**, **`{y}`**, and **`{z}`** placeholders in `setLobbySuccess` display the saved lobby spawn coordinates. Message settings take effect **after a restart**, not immediately.
+
+The `lobbySpawn` position is managed by the **`/setlobby`** command; you do not need to edit its coordinates manually. It is stored in the same JSON file and survives server restarts. When `lobbySpawn` is absent or null, `/lobby` and automatic joins fall back to the lobby world's own spawn. **`respawnAtOverworldSpawn`** defaults to `true`; set it to `false` to restore vanilla death respawn behavior, including beds and respawn anchors. Changes to this Boolean setting require a restart. Neither `/setlobby` nor `/lobby` changes the Overworld spawn, and changing `/setworldspawn` does not move the lobby spawn.
 
 Other settings include `lobbyOnJoin`, `lobbyAdventure`, `noBlockBreak`, `noBlockPlaceOrUse`, `noPlayerAttacks`, `noDamage`, `noHunger`, `noItemPickup`, `noItemDrop`, `separateInventories`, `backupIntervalTicks`, and `joinDelayTicks`.
 
@@ -132,7 +153,7 @@ This project includes a GitHub Actions workflow and Gradle build files. A Gradle
   gradle clean build
   ```
 
-- After a successful build, find `build/libs/lobby-manager-0.3.0-beta.jar`. Use this main JAR in the server's `mods/` folder (not the `-sources.jar`).
+- After a successful build, find `build/libs/lobby-manager-0.4.0-beta.jar`. Use this main JAR in the server's `mods/` folder (not the `-sources.jar`).
 - Alternatively, push the source to GitHub, select **Actions**, and run the **Build Fabric 26.3 mod** workflow. Download its JAR artifact after a successful build.
 
 **A successful compile and in-game test are still required.** Dependencies and API methods may need updating if Minecraft/Fabric changes.
@@ -142,7 +163,8 @@ This project includes a GitHub Actions workflow and Gradle build files. A Gradle
 - Always test first on a backup server, particularly after changing mod IDs or upgrading an existing world.
 - An unexpected crash during inventory switching may desynchronize saved snapshots and Minecraft's `player.dat`; automated saves are not a replacement for server backups.
 - Other mods may bypass lobby protection callbacks or interfere with custom inventory management.
-- This mod does not automatically force permanent lobby respawns after death.
+- When `respawnAtOverworldSpawn` is enabled, the mod explicitly sends dead players to the Overworld spawn; configured beds and respawn anchors will not be used. When disabled, standard Minecraft respawn rules apply.
+- If the server does not have a loaded Overworld, the mod logs an error and lets the vanilla respawn location stand.
 - NPC compatibility depends on the installed Easy NPC release and its command execution context.
 - `noMobSpawning` is currently **not enforced by Java code**; use world-specific gamerules.
 
