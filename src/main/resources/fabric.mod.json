@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "lobbymanager",
+  "version": "${version}",
+  "name": "Lobby Manager",
+  "description": "Lobby join/return, separate inventories, and lobby protection for Worlds + Easy NPC.",
+  "authors": ["BakedGarfield"],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": { "main": ["io.github.bakedgarfield.lobbymanager.LobbyManager"] },
+  "mixins": ["lobbymanager.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  },
+  "suggests": { "mc-worlds": "*" }
+}
