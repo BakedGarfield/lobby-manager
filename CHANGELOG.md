@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1-beta
+
+- Fixed late authentication / Register Mod teleports overriding the location set with `/setlobby`.
+- While the player is in the lobby login flow, recover from unexpected world changes and large teleports inside the lobby; prevent temporary world changes from overwriting survival inventory snapshots.
+- Stop enforcing the login lobby after `/returntosurvival` (also for NPCs) or death. Manual `/lobby` re-enables lobby protection for that session.
+- Updated setup and troubleshooting instructions. No configuration migration is required.
+
 ## 0.4.0-beta
 
 - Added operator-only `/setlobby` command, saving exact lobby coordinates and orientation in `config/lobbymanager.json`.

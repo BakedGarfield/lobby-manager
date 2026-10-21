@@ -6,10 +6,10 @@ A **server-side Fabric mod** for Minecraft **26.3** that sends players to a prot
 
 ## Features
 
-- **Lobby on join:** players are sent to the custom `/setlobby` location in the lobby dimension when connecting (or the lobby world spawn until `/setlobby` is configured).
+- **Lobby on join:** players are sent to the custom `/setlobby` location in the lobby dimension when connecting (or the lobby world spawn until `/setlobby` is configured). If another mod teleports them later during authentication, Lobby Manager re-sends them to the saved lobby position until they deliberately exit via `/returntosurvival`.
 - **Independent spawns:** `/setlobby` sets the login/lobby teleport point without changing `/setworldspawn` in the Overworld.
 - **Overworld respawn after death:** when `respawnAtOverworldSpawn` is enabled, death sends players to the Overworld world spawn set with `/setworldspawn`, never to the lobby; this overrides beds and respawn anchors.
-- **Return to survival:** players can return to their last saved survival position, including a position in the Nether, End, or another loaded dimension. Players without a saved position use the default survival world spawn.
+- **Return to survival:** `/returntosurvival` also ends join enforcement, so players are not sent back to the lobby after choosing survival. Players can return to their last saved survival position, including a position in the Nether, End, or another loaded dimension. Players without a saved position use the default survival world spawn.
 - **Separate inventories:** saves main inventory, armor/equipment/offhand, Ender Chest, XP, hunger, health, and game mode independently for lobby and survival. Survival dimensions share one inventory group.
 - **Lobby protection:** enables Adventure Mode for visitors and blocks typical block breaking, block interaction, item use, entity attacks, entity interaction (except for tagged NPCs), damage, dropped items, and pickups. Hunger is kept full.
 - **Admin build mode:** an operator can temporarily switch between Creative and Adventure Mode inside the lobby.
@@ -142,6 +142,17 @@ Other settings include `lobbyOnJoin`, `lobbyAdventure`, `noBlockBreak`, `noBlock
 
 **Upgrading from an earlier version:** The mod ID, config path, Java package, and player save directory have changed. **Do not delete previous player records.** With the server offline, copy your existing player JSON files from the **previous version's player-save directory** to `config/lobbymanager/players/` and recreate the new settings in `config/lobbymanager.json`. Keep a full backup and verify inventory restoration on a test server first. Renaming the code package alone does not migrate data.
 
+## Troubleshooting: login lands somewhere other than `/setlobby`
+
+1. Confirm `lobbyOnJoin` is `true` in **the server's** `config/lobbymanager.json` (not just `config-example.json`). Restart after editing this setting.
+2. Check `lobbyDimension` matches the loaded dimension: `/worlds list loaded`. The default is `minecraft:lobby`. Enable startup loading in that world: `/worlds settings loadOnStartup true`.
+3. Run `/worlds tp lobby`, stand where players should arrive, and run `/setlobby`. Verify `lobbySpawn` is no longer `null` in `config/lobbymanager.json`, and that its `world` equals `lobbyDimension`.
+4. Test `/lobby` manually. If it works but joining did not with the previous version, install 0.4.1-beta and restart the server. This version corrects later server-side teleports made by registration/authentication mods.
+5. Watch server logs for `Lobby Manager ready`, `Cannot find lobby world`, `Inventory switch failed`, or `Restored ... to /setlobby`.
+6. When a Register Mod has its own login spawn / return-to-original-location option, disable that conflicting teleport if possible. Lobby Manager controls the login destination, Register Mod controls authentication.
+
+**Behaviour during login:** until a player executes `/returntosurvival` (including via a correctly configured NPC), Lobby Manager restores them to the lobby if another mod sends them to another world. It also corrects large sudden location changes inside the lobby. Operators using teleport commands while in the lobby should use `/buildmode` to avoid same-world jump correction, or finish the login flow via `/returntosurvival` before traveling elsewhere. Death exits the join guard and still respawns in the Overworld when `respawnAtOverworldSpawn` is enabled. `lobbyOnJoin: false` disables this behaviour.
+
 ## Building the mod
 
 This project includes a GitHub Actions workflow and Gradle build files. A Gradle wrapper is **not** included.
@@ -153,7 +164,7 @@ This project includes a GitHub Actions workflow and Gradle build files. A Gradle
   gradle clean build
   ```
 
-- After a successful build, find `build/libs/lobby-manager-0.4.0-beta.jar`. Use this main JAR in the server's `mods/` folder (not the `-sources.jar`).
+- After a successful build, find `build/libs/lobby-manager-0.4.1-beta.jar`. Use this main JAR in the server's `mods/` folder (not the `-sources.jar`).
 - Alternatively, push the source to GitHub, select **Actions**, and run the **Build Fabric 26.3 mod** workflow. Download its JAR artifact after a successful build.
 
 **A successful compile and in-game test are still required.** Dependencies and API methods may need updating if Minecraft/Fabric changes.

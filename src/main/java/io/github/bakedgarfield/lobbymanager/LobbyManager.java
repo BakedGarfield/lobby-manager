@@ -48,6 +48,15 @@ public final class LobbyManager implements ModInitializer {
     private static PlayerStore store;
     private static final Map<UUID, PlayerRecord> records = new HashMap<>();
     private static final Map<UUID, Integer> pendingJoin = new HashMap<>();
+    // A join must be followed by an explicit /returntosurvival, including when an
+    // authentication mod teleports the player after our initial lobby placement.
+    private static final Map<UUID, JoinGuard> joinGuards = new HashMap<>();
+
+    private static final class JoinGuard {
+        PlayerRecord.Position lastLobbyPosition;
+        long nextAttemptTick;
+    }
+
     private static final Set<UUID> buildMode = new HashSet<>();
     private static long ticks;
 
@@ -112,7 +121,10 @@ public final class LobbyManager implements ModInitializer {
         try {
             PlayerRecord record = store.load(player.getUUID());
             records.put(player.getUUID(), record);
-            pendingJoin.put(player.getUUID(), Math.max(1, config.joinDelayTicks));
+            if (config.lobbyOnJoin) {
+                joinGuards.put(player.getUUID(), new JoinGuard());
+                pendingJoin.put(player.getUUID(), Math.max(1, config.joinDelayTicks));
+            }
         } catch (IOException ex) {
             LOG.error("Blocking lobby conversion because {} save could not be loaded", player.getName().getString(), ex);
             sendMessage(player, config.messages.playerDataLoadFailed);
@@ -122,6 +134,7 @@ public final class LobbyManager implements ModInitializer {
 
     private static void onLeave(ServerPlayer player, MinecraftServer server) {
         pendingJoin.remove(player.getUUID());
+        joinGuards.remove(player.getUUID());
         saveOnline(player, server);
         records.remove(player.getUUID());
         buildMode.remove(player.getUUID());
@@ -140,8 +153,36 @@ public final class LobbyManager implements ModInitializer {
                     continue;
                 }
                 pendingJoin.remove(uuid);
-                if (config.lobbyOnJoin) joinLobby(player, record, server);
+                if (config.lobbyOnJoin && joinLobby(player, record, server)) {
+                    JoinGuard guard = joinGuards.get(uuid);
+                    if (guard != null) guard.lastLobbyPosition = PlayerRecord.location(player);
+                }
                 continue;
+            }
+
+            // Some registration/login mods teleport the player *after* Fabric's
+            // JOIN event (sometimes only after /login). A single delayed teleport
+            // is not enough. Until the player explicitly chooses survival, keep
+            // their session in the lobby. Check this BEFORE group/inventory sync
+            // so another mod's temporary world change cannot corrupt snapshots.
+            JoinGuard guard = joinGuards.get(uuid);
+            if (guard != null && config.lobbyOnJoin) {
+                boolean wrongWorld = !isLobby(player);
+                boolean unexpectedTeleport = !wrongWorld && !buildMode.contains(uuid)
+                        && guard.lastLobbyPosition != null
+                        && wasTeleportedInLobby(player, guard.lastLobbyPosition);
+                if (wrongWorld || unexpectedTeleport) {
+                    if (ticks >= guard.nextAttemptTick) {
+                        boolean corrected = joinLobby(player, record, server);
+                        guard.nextAttemptTick = ticks + 20; // prevent log / message spam on failure
+                        if (corrected) {
+                            guard.lastLobbyPosition = PlayerRecord.location(player);
+                            LOG.info("Restored {} to /setlobby after another teleport", player.getName().getString());
+                        }
+                    }
+                    continue;
+                }
+                guard.lastLobbyPosition = PlayerRecord.location(player);
             }
 
             boolean lobby = isLobby(player);
@@ -169,9 +210,21 @@ public final class LobbyManager implements ModInitializer {
         }
     }
 
+    /** Regular walking is only a fraction of a block per tick; detect late same-world teleports. */
+    private static boolean wasTeleportedInLobby(ServerPlayer player, PlayerRecord.Position previous) {
+        double dx = player.getX() - previous.x();
+        double dy = player.getY() - previous.y();
+        double dz = player.getZ() - previous.z();
+        return dx * dx + dy * dy + dz * dz > 4.0;
+    }
+
     /** Respawning after death uses the vanilla Overworld world spawn, never /setlobby. */
     private static void onRespawn(ServerPlayer oldPlayer, ServerPlayer newPlayer, boolean alive) {
-        if (alive || !config.respawnAtOverworldSpawn) return;
+        if (alive) return;
+        // Dying must never trigger a forced login-lobby correction.
+        joinGuards.remove(newPlayer.getUUID());
+        pendingJoin.remove(newPlayer.getUUID());
+        if (!config.respawnAtOverworldSpawn) return;
         buildMode.remove(newPlayer.getUUID());
         MinecraftServer server = newPlayer.level().getServer();
         ServerLevel overworld = world(server, "minecraft:overworld");
@@ -335,6 +388,11 @@ public final class LobbyManager implements ModInitializer {
                 return 0;
             }
             if (!joinLobby(player, record, ctx.getSource().getServer())) return 0;
+            if (config.lobbyOnJoin) {
+                JoinGuard guard = new JoinGuard();
+                guard.lastLobbyPosition = PlayerRecord.location(player);
+                joinGuards.put(player.getUUID(), guard);
+            }
             sendMessage(player, config.messages.lobbySuccess);
             return 1;
         }));
@@ -417,6 +475,9 @@ public final class LobbyManager implements ModInitializer {
             return 0;
         }
         if (config.separateInventories && !switchGroup(player, record, "SURVIVAL", ctx.getSource().getServer())) return 0;
+        // Explicit exit, including from a clickable NPC, ends the join guard.
+        joinGuards.remove(player.getUUID());
+        pendingJoin.remove(player.getUUID());
         sendMessage(player, config.messages.survivalSuccess);
         return 1;
     }
