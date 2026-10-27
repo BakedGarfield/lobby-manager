@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2-beta
+
+- Fixed unwanted automatic return to `/setlobby` following manual, Worlds, or NPC teleports. Removed the persistent join guard and the `Restored ... to /setlobby after another teleport` log message.
+- Kept the one-time automatic `/setlobby` placement after the configurable join delay, `/lobby`, `/returntosurvival`, and independent Overworld death spawns.
+- Preserved automatic lobby/survival inventory-group switching on dimension transitions.
+- Updated README with the important post-login teleport interaction for Register Safe and manual verification steps.
+- No saved-player-data or configuration format changes.
+
 ## 0.4.1-beta
 
 - Fixed late authentication / Register Mod teleports overriding the location set with `/setlobby`.
